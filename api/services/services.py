@@ -10,6 +10,31 @@ loggin_setup.setup_logging()
 log = logging.getLogger("Productos")
 log.info("Inicio del programa")
 
+class Usuarios:
+    def login(self, alias:str, clave:str):
+        log.info("Logueando a: ", alias)
+        try:
+            sql = f"""
+                   select * from usuarios where alias = %s and clave  = %s
+                                """
+
+
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(sql, (alias, clave))
+
+            user = cursor.fetchone()
+
+        except Exception as e:
+            log.warning("Hubo un error al intentar loguearse", e)
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+        return user
+
+
+
 class Productos:
 
     def get_productos(self, id_tienda:int = None, clave:str = None):
