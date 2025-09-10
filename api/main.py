@@ -1,7 +1,7 @@
 import logging.config
 from flask import Flask, request, jsonify
 from api.data.db import get_connection
-from api.services.services import Productos, Inventarios, Politicas
+from api.services.services import Productos, Inventarios, Politicas, Usuarios
 from settings import loggin_setup
 
 loggin_setup.setup_logging()
@@ -9,6 +9,25 @@ loggin_setup.setup_logging()
 log = logging.getLogger(__name__)
 log.info("Inicio del programa")
 app = Flask("main")
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    alias = data.get('alias')
+    clave = data.get('clave')
+
+    if not alias or not clave:
+        log.error("Faltan datos requeridos")
+        return jsonify({'error': 'Faltan datos requeridos'}), 400
+
+    try:
+        u = Usuarios()
+        ret = u.login(alias, clave)
+        if not ret:
+            return jsonify({'mensaje': 'Usuario o contraseña incorrectos'}), 406
+        return jsonify(ret)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/usuarios', methods=['GET'])
 def obtener_usuarios():
