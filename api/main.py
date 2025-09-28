@@ -284,7 +284,7 @@ def save_producto():
         log.info(f"Producto obtenido {clave}")
 
         if id_producto_tmp:
-            inv = p.alta_inventario(id_tienda, id_producto_tmp, existencia)
+            inv = p.alta_inventario(id_tienda, id_producto_tmp, existencia, True)
             if inv == 0:
                 log.warning("Inventario no registrado")
             else:

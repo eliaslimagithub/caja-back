@@ -43,12 +43,51 @@ class Productos:
         params =[]
         try:
             sql = f"""
-                    select * from productos p 
+select p.id_producto, p.clave clave_producto, p.descripcion, p.clave_alterna, l.clave as clave_linea, l.descripcion_linea,
+i.stock existencias,
+pr_1.precio precio_publico,
+pr_2.precio precio_2,
+pr_3.precio precio_3,
+pr_4.precio precio_4,
+pr_5.precio precio_5,
+pr_6.precio precio_6,
+pr_7.precio precio_7,
+pr_8.precio precio_8,
+pr_9.precio precio_9,
+pr_10.precio precio_minimo,
+pr_11.precio costo_promedio,
+pr_12.precio ultimo_costo
+from productos p 
                     left join inventarios i
                     on i.id_producto = p.id_producto
                     left join tiendas t 
                     on t.id_tienda = i.id_tienda 
+                    left join lineas l on l.id_linea = p.id_linea 
                     and i.id_tienda = %s
+                    left join precios pr_1 on pr_1.id_producto = p.id_producto 
+                    and pr_1.id_precio = 1
+                    left join precios pr_2 on pr_2.id_producto = p.id_producto 
+                    and pr_2.id_precio = 2
+                    left join precios pr_3 on pr_3.id_producto = p.id_producto 
+                    and pr_3.id_precio = 3
+                    left join precios pr_4 on pr_4.id_producto = p.id_producto 
+                    and pr_4.id_precio = 4
+                    left join precios pr_5 on pr_5.id_producto = p.id_producto 
+                    and pr_5.id_precio = 5
+                    left join precios pr_6 on pr_6.id_producto = p.id_producto 
+                    and pr_6.id_precio = 6
+                    left join precios pr_7 on pr_7.id_producto = p.id_producto 
+                    and pr_7.id_precio = 7
+                    left join precios pr_8 on pr_8.id_producto = p.id_producto 
+                    and pr_8.id_precio = 8
+                    left join precios pr_9 on pr_9.id_producto = p.id_producto 
+                    and pr_9.id_precio = 9
+                    left join precios pr_10 on pr_10.id_producto = p.id_producto 
+                    and pr_10.id_precio = 10
+                    left join precios pr_11 on pr_11.id_producto = p.id_producto 
+                    and pr_11.id_precio = 11
+                    left join precios pr_12 on pr_12.id_producto = p.id_producto 
+                    and pr_12.id_precio = 12
                         """
             params.append(id_tienda)
             if clave:
@@ -58,9 +97,7 @@ class Productos:
             conn = get_connection()
             cursor = conn.cursor()
             cursor.execute(sql, params)
-            print(f"->> sql {sql}")
             prods = cursor.fetchall()
-            print(f"->>>> prods:  {prods}")
 
         except Exception as e:
             log.warning("Hubo un error al consultar productos", e)
@@ -125,7 +162,7 @@ class Productos:
         finally:
             conn.close()
 
-    def alta_inventario(self, id_tienda:int = None, id_producto:int = None, cantidad:float = 0):
+    def alta_inventario(self, id_tienda:int = None, id_producto:int = None, cantidad:float = 0, edit:bool = False):
 
         try:
             conn = get_connection()
@@ -133,8 +170,13 @@ class Productos:
                 sql = f"""
                    insert into inventarios (id_tienda, id_producto, stock)
                        values(%s, %s, %s)
-                       ON DUPLICATE KEY UPDATE stock = stock + coalesce(VALUES(stock), 0);
+                       
                    """
+                if edit:
+                    sql += f""" ON DUPLICATE KEY UPDATE stock = coalesce(VALUES(stock), 0);"""
+                else:
+                    sql += f""" ON DUPLICATE KEY UPDATE stock = stock + coalesce(VALUES(stock), 0);"""
+
 
                 cursor.execute(sql, (id_tienda, id_producto, cantidad))
                 conn.commit()
