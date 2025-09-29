@@ -32,20 +32,33 @@ def login():
 
 @app.route('/usuarios', methods=['GET'])
 def obtener_usuarios():
+    data = request.get_json()
+    alias = data.get('alias')
+
+    params = []
+
+    sql = f"""
+    select u.alias, u.nombre as nombre,r.id_rol as id_rol,
+    r.descripcion_rol rol, t.id_tienda as id_tienda,
+    t.descripcion_tienda tienda 
+    from usuarios u inner join roles r
+    on u.id_rol = r.id_rol
+    left join tiendas t
+    on t.id_tienda = u.id_tienda
+                    """
 
     try:
-        sql = f"""
-        select u.id_usuario, u.alias, u.nombre, 
-case 
-	when editar_precio = 0 then 'No'
-	when editar_precio = 1 then 'Si' 
-end editar_precio,
-       r.descripcion_rol as rol  from usuarios u, roles r
-where u.id_rol = r.id_rol
-                """
+
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(sql)
+
+        if alias:
+            sql += f""" where u.alias like %s"""
+            params.append("%" + alias + "%")
+            cursor.execute(sql, params)
+        else:
+            cursor.execute(sql)
+
 
         usuarios = cursor.fetchall()
 
@@ -63,7 +76,7 @@ def crear_usuario():
     alias = data.get('alias')
     clave = data.get('clave')
     id_rol = data.get('id_rol')
-    editar_precio = data.get('editar_precio')
+    id_tienda = data.get('id_tienda')
 
     if not nombre or not alias or not clave or not id_rol:
         log.warning("Faltan datos requeridos")
@@ -72,8 +85,8 @@ def crear_usuario():
     try:
         conn = get_connection()
         with conn.cursor() as cursor:
-            sql = "insert into usuarios(alias, nombre, clave, id_rol, editar_precio) values(%s,%s,%s,%s,%s)"
-            cursor.execute(sql, (alias, nombre, clave, id_rol, editar_precio))
+            sql = "insert into usuarios(alias, nombre, clave, id_rol, id_tienda) values(%s,%s,%s,%s,%s)"
+            cursor.execute(sql, (alias, nombre, clave, id_rol, id_tienda))
             conn.commit()
         log.info("Usuario creado correctamente")
         return jsonify({'mensaje': 'Usuario creado correctamente'}), 201
@@ -90,7 +103,7 @@ def actualizar_usuario(id):
     alias = data.get('alias')
     clave = data.get('clave')
     id_rol = data.get('id_rol')
-    editar_precio = data.get('editar_precio')
+    id_tienda = data.get('id_tienda')
 
 
     if not nombre or not alias or not clave or not id_rol:
@@ -100,14 +113,14 @@ def actualizar_usuario(id):
     try:
         conn = get_connection()
         with conn.cursor() as cursor:
-            sql = "update usuarios set alias = %s, nombre = %s, clave = %s, id_rol = %s, editar_precio = %s where id_usuario = %s"
-            cursor.execute(sql, (alias, nombre, clave, id_rol, editar_precio, id))
+            sql = "update usuarios set alias = %s, nombre = %s, clave = %s, id_rol = %s, id_tienda = %s where id_usuario = %s"
+            cursor.execute(sql, (alias, nombre, clave, id_rol, id_tienda, id))
             conn.commit()
             if cursor.rowcount == 0:
                 log.info("Usuario no encontrado")
                 return jsonify({'mensaje': 'Usuario no encontrado'}), 404
-        log.info("Usuario creado correctamente")
-        return jsonify({'mensaje': 'Usuario creado correctamente'}), 201
+        log.info("Usuario modificado correctamente")
+        return jsonify({'mensaje': 'Usuario modificado correctamente'}), 201
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     finally:
