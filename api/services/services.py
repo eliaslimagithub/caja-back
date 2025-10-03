@@ -11,18 +11,13 @@ log = logging.getLogger("Productos")
 log.info("Inicio del programa")
 
 class Usuarios:
-    def login(self, alias:str, clave:str):
+    def login(self, alias:str):
         log.info("Logueando a: " + alias)
         try:
-            sql = f"""
-                   select * from usuarios where alias = %s and clave  = %s
-                                """
-
-
+            sql = "SELECT * FROM usuarios WHERE alias = %s"
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute(sql, (alias, clave))
-
+            cursor.execute(sql, (alias,))
             user = cursor.fetchone()
 
         except Exception as e:
@@ -32,9 +27,21 @@ class Usuarios:
             cursor.close()
             conn.close()
         return user
-
-
-
+    def get_user_by_id(self,id: int):
+        log.info("Inicio del programa")
+        try:
+            sql = "SELECT * FROM usuarios WHERE id_usuario = %s"
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(sql, (id,))
+            user = cursor.fetchone()
+        except Exception as e:
+            log.warning("Hubo un error al intentar loguearse", e)
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+        return user
 class Productos:
 
     def get_productos(self, id_tienda:int = None, clave:str = None):

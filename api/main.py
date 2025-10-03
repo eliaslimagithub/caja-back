@@ -1,44 +1,111 @@
 import logging.config
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, session
 from flask_cors import CORS
 from api.data.db import get_connection
 from api.services.services import Productos, Inventarios, Politicas, Usuarios, Departamentos, Lineas
 from settings import loggin_setup
+import jwt
+import datetime
+from functools import wraps
+import bcrypt
+from inspect import signature
 
 loggin_setup.setup_logging()
 
 log = logging.getLogger(__name__)
 log.info("Inicio del programa")
 app = Flask("main")
+
 cors = CORS(app, resources={r'/*': {'origins': 'http://localhost:4200'}})
+app.config['SECRET_KEY'] = 'clave-super-secreta'
+
+def token_requerido(f):
+    @wraps(f)
+    def decorador(*args, **kwargs):
+        token = request.headers.get('Authorization')
+
+        if not token or not token.startswith("Bearer "):
+            return jsonify({'mensaje': 'Token faltante o inválido'}), 401
+
+        token = token.replace("Bearer ", "")
+        try:
+            datos = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            usuario = datos.get('usuario')
+
+            # Checar si la función decorada acepta 'usuario'
+            sig = signature(f)
+            if 'usuario' in sig.parameters:
+                return f(*args, usuario=usuario, **kwargs)
+            else:
+                return f(*args, **kwargs)
+
+        except jwt.ExpiredSignatureError:
+            return jsonify({'mensaje': 'Token expirado'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'mensaje': 'Token inválido'}), 401
+        except Exception as e:
+            return jsonify({'mensaje': f'Error al procesar el token: {str(e)}'}), 401
+
+    return decorador
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
     alias = data.get('alias')
     clave = data.get('clave')
-
+    log.info("Clave %s", clave)
     if not alias or not clave:
         log.error("Faltan datos requeridos")
         return jsonify({'error': 'Faltan datos requeridos'}), 400
 
     try:
         u = Usuarios()
-        ret = u.login(alias, clave)
+        ret = u.login(alias)
         if not ret:
-            return jsonify({'mensaje': 'Usuario o contraseña incorrectos'}), 406
-        return jsonify(ret)
+           return jsonify({'mensaje': 'Usuario no existe'}), 406
+
+        if ret and bcrypt.checkpw(clave.encode('utf-8'), ret.get('password').encode('utf-8')):
+            token = jwt.encode({
+                'usuario': alias,
+                'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=1800)
+            }, app.config['SECRET_KEY'], algorithm='HS256')
+            sql = "update usuarios set token = %s where id_usuario = %s"
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(sql, (token, ret.get('id_usuario')))
+            conn.commit()
+            rows = u.get_user_by_id(ret.get('id_usuario'))
+            return jsonify({'data': rows})
+        else:
+            return jsonify({'mensaje': 'La contraseña no es correcta'}), 406
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/usuarios', methods=['GET'])
-def obtener_usuarios():
+@app.route('/logout', methods=['POST'])
+def logout():
     data = request.get_json()
     alias = data.get('alias')
+    try:
+        log.info("Logged user %s", alias)
+        sql = "update usuarios set token = NULL where alias = %s"
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(sql, (alias,))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+    # Clear specific session data or the entire session
+    return jsonify({'message' : 'Se ha cerrado la sesión'}), 200
+
+@app.route('/usuarios', methods=['GET'])
+@token_requerido
+def obtener_usuarios(usuario):
+    alias = request.args.get('alias')  # <-- usando query params
 
     params = []
 
     sql = f"""
-    select u.alias, u.nombre as nombre,r.id_rol as id_rol,
+    select u.id_usuario, u.alias, u.nombre as nombre,r.id_rol as id_rol,
     r.descripcion_rol rol, t.id_tienda as id_tienda,
     t.descripcion_tienda tienda 
     from usuarios u inner join roles r
@@ -70,6 +137,7 @@ def obtener_usuarios():
     return jsonify(usuarios)
 
 @app.route('/usuarios', methods=['POST'])
+@token_requerido
 def crear_usuario():
     data = request.get_json()
     nombre = data.get('nombre')
@@ -82,12 +150,14 @@ def crear_usuario():
         log.warning("Faltan datos requeridos")
         return jsonify({'error': 'Faltan datos requeridos'}), 400
 
+    hashed = bcrypt.hashpw(clave.encode('utf-8'), bcrypt.gensalt())
     try:
         conn = get_connection()
         with conn.cursor() as cursor:
-            sql = "insert into usuarios(alias, nombre, clave, id_rol, id_tienda) values(%s,%s,%s,%s,%s)"
-            cursor.execute(sql, (alias, nombre, clave, id_rol, id_tienda))
+            sql = "insert into usuarios(alias, nombre, password, id_rol, id_tienda) values(%s,%s,%s,%s,%s)"
+            cursor.execute(sql, (alias, nombre, hashed, id_rol, id_tienda))
             conn.commit()
+
         log.info("Usuario creado correctamente")
         return jsonify({'mensaje': 'Usuario creado correctamente'}), 201
     except Exception as e:
