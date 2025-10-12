@@ -1,7 +1,7 @@
 import logging.config
 from flask import Flask, request, jsonify, session
 from flask_cors import CORS
-from api.data.db import get_connection
+from api.data.db import get_connection, if_table_exists
 from api.services.services import Productos, Inventarios, Politicas, Usuarios, Departamentos, Lineas
 from settings import loggin_setup
 import jwt
@@ -105,11 +105,11 @@ def obtener_usuarios(usuario):
     params = []
 
     sql = f"""
-    select u.id_usuario, u.alias, u.nombre as nombre,r.id_rol as id_rol,
-    r.descripcion_rol rol, t.id_tienda as id_tienda,
+    select u.id_usuario, u.alias, u.nombre as nombre,r.id as id_rol,
+    r.name rol, t.id_tienda as id_tienda,
     t.descripcion_tienda tienda 
     from usuarios u inner join roles r
-    on u.id_rol = r.id_rol
+    on u.id_rol = r.id
     left join tiendas t
     on t.id_tienda = u.id_tienda
                     """
@@ -213,12 +213,13 @@ def eliminar_usuario(id):
         conn.close()
 
 @app.route('/tiendas', methods=['GET'])
+@token_requerido
 def obtener_tiendas():
     try:
         sql = f"""
-select t.id_tienda, t.descripcion_tienda, t.direccion, t.telefono, p.descripcion_precio  
+select t.id_tienda, t.descripcion_tienda, t.direccion, t.telefono, p.id as id_precio, p.name as descripcion_precio  
 from tiendas t, cat_precios p
-where t.id_precio_omision = p.id_precio;
+where t.id_precio_omision = p.id;
                     """
         conn = get_connection()
         cursor = conn.cursor()
@@ -234,6 +235,7 @@ where t.id_precio_omision = p.id_precio;
     return jsonify(tiendas)
 
 @app.route('/tiendas', methods=['POST'])
+@token_requerido
 def crear_tienda():
     data = request.get_json()
     descripcion_tienda = data.get('descripcion_tienda')
@@ -262,6 +264,7 @@ def crear_tienda():
         conn.close()
 
 @app.route('/tiendas/<int:id>', methods=['PUT'])
+@token_requerido
 def actualizarr_tienda(id):
     data = request.get_json()
     descripcion_tienda = data.get('descripcion_tienda')
@@ -293,6 +296,7 @@ update tiendas set descripcion_tienda = %s,
         conn.close()
 
 @app.route('/tiendas/<int:id>', methods=['DELETE'])
+@token_requerido
 def eliminar_tienda(id):
     try:
         conn = get_connection()
@@ -691,6 +695,28 @@ def update_lineas(id):
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/catalogs/<string:name>', methods=['GET'])
+def get_catalogs(name):
+    print("Catalogos")
+    log.info("Catalogos %s" % name)
+
+    try:
+        tabl = if_table_exists(name)
+        if tabl.get('exi') == 0:
+            return jsonify({'error': 'Catalogo no encontrado'}), 404
+
+        sql = "SELECT id, name FROM "+name+" WHERE status = 0"
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(sql)
+        catalogs = cursor.fetchall()
+    except Exception as e:
+        jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+    return jsonify(catalogs), 201
 
 if __name__ == '__main__':
     app.run(debug=True) # debug=True para desarrollo
