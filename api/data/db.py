@@ -30,3 +30,26 @@ def if_table_exists(table):
         cursor.close()
         conn.close()
     return dt
+def catalogs_by_name(table, columns=None):
+
+    print("Method con name table: ", table)
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        if not columns:
+            sql = f"SELECT * FROM `{table}` WHERE status = 0"
+        else:
+            sql = f"SELECT * FROM `{table}`"
+        cursor.execute(sql)
+        dt = cursor.fetchall()
+        if not columns:
+            dr = [{r['name']: r['id']} for r in dt]
+        else:
+            dr = [{r[columns[1]]: r[columns[0]]} for r in dt]
+
+    except Exception as e:
+        print(f"Error de conexion: {e}")
+    finally:
+        cursor.close()
+        conn.close()
+    return dr

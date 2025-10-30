@@ -1,7 +1,7 @@
 import logging.config
 from flask import Flask, request, jsonify, session
 from flask_cors import CORS
-from api.data.db import get_connection, if_table_exists
+from api.data.db import get_connection, if_table_exists, catalogs_by_name
 from api.services.services import Productos, Inventarios, Politicas, Usuarios, Departamentos, Lineas
 from settings import loggin_setup
 import jwt
@@ -9,7 +9,13 @@ import datetime
 from functools import wraps
 import bcrypt
 from inspect import signature
-
+import pandas as pd
+import openpyxl
+import os
+import tempfile
+import math
+import unicodedata
+import re
 loggin_setup.setup_logging()
 
 log = logging.getLogger(__name__)
@@ -18,6 +24,20 @@ app = Flask("main")
 
 cors = CORS(app, resources={r'/*': {'origins': 'http://localhost:4200'}})
 app.config['SECRET_KEY'] = 'clave-super-secreta'
+#app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB espacio para la carga de un archivo
+BATCH_SIZE = 100  # Tamaño del bloque de inserción para registros con mas de 1000 datos
+
+def clean(v):
+    """Convierte NaN o None en None válido para MySQL."""
+    return None if (v is None or (isinstance(v, float) and math.isnan(v))) else v
+def normalice(k):
+    k = k.strip().lower()  # convertir en minusculas
+    k = unicodedata.normalize('NFKD', k).encode('ascii', 'ignore').decode('utf-8')  # eliminar acentos
+    # Mantener el espacio solo en "precio publico"
+    if k == "precio publico" or k == 'precio minimo' or k == "costo promedio" or k == "ultimo costo":
+        return k  # se queda con espacio
+    else:
+        return re.sub(r'\s+', '', k)  # elimina los espacios de la cadena
 
 def token_requerido(f):
     @wraps(f)
@@ -47,6 +67,32 @@ def token_requerido(f):
             return jsonify({'mensaje': f'Error al procesar el token: {str(e)}'}), 401
 
     return decorador
+@app.route('/keep-alive', methods=['POST'])
+@token_requerido
+def keep_alive(usuario=None):
+    try:
+        # Crear un nuevo token con tiempo renovado
+        nuevo_token = jwt.encode({
+            'usuario': usuario,
+            'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=300)  # 30 minutos
+        }, app.config['SECRET_KEY'], algorithm='HS256')
+
+        # (Opcional) actualizar el token en la base de datos
+        u = Usuarios()
+        user = u.login(usuario)
+        if not user:
+            return jsonify({'mensaje': 'Usuario no encontrado'}), 404
+
+        sql = "UPDATE usuarios SET token = %s WHERE id_usuario = %s"
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(sql, (nuevo_token, user.get('id_usuario')))
+        conn.commit()
+
+        return jsonify({'token': nuevo_token})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -66,7 +112,7 @@ def login():
         if ret and bcrypt.checkpw(clave.encode('utf-8'), ret.get('password').encode('utf-8')):
             token = jwt.encode({
                 'usuario': alias,
-                'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=1800)
+                'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=300)
             }, app.config['SECRET_KEY'], algorithm='HS256')
             sql = "update usuarios set token = %s where id_usuario = %s"
             conn = get_connection()
@@ -383,6 +429,134 @@ def save_producto():
         return jsonify({'mensaje': 'Producto registrado correctamente'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/upload/<string:method>', methods=['POST'])
+@token_requerido
+def subir_archivo(method):
+    if method == "massive-products":
+        if 'file' not in request.files:
+            return jsonify({'error': 'Archivo no enviado'}), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify(error="Nombre del archivo vacío"), 400
+        cat_precios = catalogs_by_name('cat_precios')
+        #list_precios = [{normalice(k): v for k, v in row.items()} for row in cat_precios] # se llama a normalice para que solo el name le elimine los espacios
+        list_precios = {normalice(k): v for d in cat_precios for k, v in d.items()}  # se llama a normalice para que solo el name le elimine los espacios
+        cat_linea = catalogs_by_name('lineas', {0:'id_linea', 1:'clave'})
+        rows_line = {k: v for d in cat_linea for k, v in d.items()} # unificar todo el array
+
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp:
+                file.save(tmp.name)
+                df = pd.read_excel(tmp.name)
+                df = df.where(pd.notnull(df), None)
+            #print("Excel ", df)
+            columnas_esperadas = {
+                'clave', 'descripcion', 'clave de linea', 'clave departamento',
+                'clave de moneda', 'precio publico', 'precio2', 'precio3',
+                'precio4', 'precio5', 'precio6', 'precio7', 'precio8', 'precio9',
+                'precio minimo', 'clave alterna', 'unidad de entrada',
+                'costo promedio', 'ultimo costo'
+            }
+
+            if not columnas_esperadas.issubset(df.columns):
+                return jsonify({'error': f'Faltan columnas. Se requieren: {list(columnas_esperadas)}'}), 400
+
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            sql = """
+                INSERT INTO productos (clave, descripcion, clave_alterna, unidad_entrada, editar_precio, id_linea)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    clave = VALUES(clave),
+                    descripcion = VALUES(descripcion),
+                    clave_alterna = COALESCE(VALUES(clave_alterna), clave_alterna),
+                    unidad_entrada = COALESCE(VALUES(unidad_entrada), unidad_entrada),
+                    editar_precio = 0,
+                    id_linea = VALUES(id_linea);
+                """
+
+            exitosos = 0
+            errores = []
+            batch = []
+            batch_precios = {}
+
+            for index, row in df.iterrows():
+                try:
+                    clave = clean(row['clave'])
+                    des = clean(row['descripcion'])
+                    claLine = clean(row['clave de linea'])
+                    claAlt = clean(row['clave alterna'])
+                    unidad_entrada = clean(row['unidad de entrada'])
+
+                    # Construir el batch para la lista de los catalogos con el asociativo clave de producto
+                    if clave not in batch_precios:
+                        batch_precios[clave] = {}
+                    for k, id_precio in list_precios.items():
+                        valor = clean(row.get(k))
+                        if valor is not None and valor != "":
+                            batch_precios[clave][id_precio] = valor
+
+                    id_line = rows_line.get(f'{claLine}') # se compara con el value, en el cat de array de la linea si existe el id
+                    if id_line is None:
+                        errores.append({'fila': index + 2, 'error': f'Línea no encontrada: {claLine}'})
+                        continue
+
+                    batch.append((clave, des, claAlt, unidad_entrada, 0, id_line))
+                    # Ejecutar en bloques de N filas
+                    if len(batch) >= BATCH_SIZE:
+                        #print("Longitud ", batch)
+                        #print("BATCH ", BATCH_SIZE)
+                        cursor.executemany(sql, batch)
+                        conn.commit()
+                        exitosos += len(batch)
+                        batch.clear()
+
+                except Exception as e:
+                    errores.append({'fila': index + 2, 'error': str(e)})
+
+            #
+
+            # Ejecutar las filas restantes
+            if batch:
+                print("Ver cuando entra aqui", batch)
+                cursor.executemany(sql, batch)
+                conn.commit()
+                exitosos += len(batch)
+            if batch_precios:
+                sql_precios = "INSERT INTO precios (id_producto, id_precio, precio) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE precio = VALUES(precio)"
+                precios_insert = []
+                for id_producto, precios in batch_precios.items():
+                    sql_id_products = "SELECT id_producto FROM productos WHERE clave = %s"
+                    cursor.execute(sql_id_products, id_producto)
+                    id_prod = cursor.fetchone()
+                    print("id_producto asd", id_prod.get('id_producto'))
+                    for id_tipo_precio, valor in precios.items():
+                        precios_insert.append((id_prod.get('id_producto'), id_tipo_precio, valor))
+
+                if precios_insert:
+                    cursor.executemany(sql_precios, precios_insert)
+                    conn.commit()
+            cursor.close()
+            conn.close()
+
+            return jsonify({
+                'total': len(df),
+                'exitosos': exitosos,
+                'errores': errores
+            })
+
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+        finally:
+            if os.path.exists(tmp.name):
+                os.remove(tmp.name)
+
+    else:
+        return jsonify({'error': ''}), 400
+    return jsonify(mensaje=f"Archivo recibido: "), 200
 
 @app.route('/inventarios/movimiento/<int:t>', methods=['POST'])
 def movimiento_inventario(t):
