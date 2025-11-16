@@ -43,6 +43,37 @@ class Usuarios:
             conn.close()
         return user
 class Productos:
+    def get_products(self, params: any= None):
+        print("Entando al catalogo de Productos")
+        try:
+            sql = f"""SELECT p.id_producto, p.clave, p.descripcion, p.clave_alterna, p.unidad_entrada, p.editar_precio, l.id_linea, l.clave, l.descripcion_linea, 
+                    d.id_departamento, d.clave, d.descripcion_departamento, JSON_ARRAYAGG(JSON_OBJECT(cp.name, pr.precio)) AS lista_precios
+                FROM `productos` p
+                    INNER JOIN lineas l ON l.id_linea = p.id_linea
+                    INNER JOIN departamentos d ON d.id_departamento = l.id_departamento
+                    LEFT JOIN precios pr ON pr.id_producto = p.id_producto
+                    LEFT JOIN cat_precios cp ON cp.id = pr.id_precio
+                GROUP BY 1;"""
+            #sql2 = f"""SELECT p.id_producto, p.clave, p.descripcion, p.clave_alterna, p.unidad_entrada, p.editar_precio, l.id_linea, l.clave, l.descripcion_linea,
+            #        d.id_departamento, d.clave, d.descripcion_departamento
+            #    FROM `productos` p
+            #        INNER JOIN lineas l ON l.id_linea = p.id_linea
+            #        INNER JOIN departamentos d ON d.id_departamento = l.id_departamento
+            #    GROUP BY 1;"""
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(sql)
+            productrs = cursor.fetchall()
+            print(f"{len(productrs)} productos encontrados")
+            print(f"array {productrs}")
+
+        except Exception as e:
+            log.warning("Hubo un error al consultar productos", e)
+            return e
+        finally:
+            cursor.close()
+            conn.close()
+        return productrs
 
     def get_productos(self, id_tienda: int = None, clave: str = None):
         print(f"Tienda: {id_tienda}")

@@ -5,8 +5,8 @@ def get_connection():
         conn = pymysql.connect(
             host='localhost',
             user='root',
-            password='Elias_lima86',
-            database='caja3',
+            password='',
+            database='caja',
             cursorclass=pymysql.cursors.DictCursor
         )
         print("Conectando...")
@@ -53,3 +53,20 @@ def catalogs_by_name(table, columns=None):
         cursor.close()
         conn.close()
     return dr
+
+def toObject(sql=None, params=None ):
+    conn = get_connection()
+    cursor = conn.cursor()
+    if not sql:
+        return ""
+    try:
+        cursor.execute(sql, params)
+        columns = [col[0] for col in cursor.description]  # nombres de columnas
+        rows = cursor.fetchall()
+        result = [dict(zip(columns, row)) for row in rows]  # convierte cada fila en dict
+    except Exception as e:
+        print(f"Error de conexion: {e}")
+    finally:
+        cursor.close()
+        conn.close()
+    return result

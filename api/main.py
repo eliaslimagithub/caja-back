@@ -74,7 +74,7 @@ def keep_alive(usuario=None):
         # Crear un nuevo token con tiempo renovado
         nuevo_token = jwt.encode({
             'usuario': usuario,
-            'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=300)  # 30 minutos
+            'exp': datetime.datetime.utcnow() + datetime.timedelta(seconds=300)  # 5 minutos
         }, app.config['SECRET_KEY'], algorithm='HS256')
 
         # (Opcional) actualizar el token en la base de datos
@@ -358,18 +358,21 @@ def eliminar_tienda(id):
     finally:
         conn.close()
 
-@app.route('/productos/consulta', methods=['POST'])
+@app.route('/productos', methods=['GET'])
 def get_producto():
-    data = request.get_json()
-    id_tienda = data.get('id_tienda')
-    clave = data.get('clave')
-
+    #data = request.get_json()
+    # 1️⃣ Obtener parámetros de la URL (no del body)
+    parm = request.args.get('params')
+    #id_tienda = data.get('id_tienda')
+    #clave = data.get('clave')
+    print("EJEMPLO ::: ", parm)
     try:
         p = Productos()
-        productos = p.get_productos(id_tienda= id_tienda, clave=clave)
+        #productos = p.get_productos(id_tienda= id_tienda, clave=clave)
+        productos = p.get_products([])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    return jsonify(productos)
+    return jsonify(productos), 200
 
 @app.route('/productos', methods=['DELETE'])
 def delete_producto():
@@ -449,102 +452,100 @@ def subir_archivo(method):
                 file.save(tmp.name)
                 df = pd.read_excel(tmp.name)
                 df = df.where(pd.notnull(df), None)
-            #print("Excel ", df)
-            columnas_esperadas = {
-                'clave', 'descripcion', 'clave de linea', 'clave departamento',
-                'clave de moneda', 'precio publico', 'precio2', 'precio3',
-                'precio4', 'precio5', 'precio6', 'precio7', 'precio8', 'precio9',
-                'precio minimo', 'clave alterna', 'unidad de entrada',
-                'costo promedio', 'ultimo costo'
-            }
+                #print("Excel ", df)
+                columnas_esperadas = {
+                    'clave', 'descripcion', 'clave de linea', 'clave departamento',
+                    'clave de moneda', 'precio publico', 'precio2', 'precio3',
+                    'precio4', 'precio5', 'precio6', 'precio7', 'precio8', 'precio9',
+                    'precio minimo', 'clave alterna', 'unidad de entrada',
+                    'costo promedio', 'ultimo costo'
+                }
 
-            if not columnas_esperadas.issubset(df.columns):
-                return jsonify({'error': f'Faltan columnas. Se requieren: {list(columnas_esperadas)}'}), 400
+                if not columnas_esperadas.issubset(df.columns):
+                    return jsonify({'error': f'Faltan columnas. Se requieren: {list(columnas_esperadas)}'}), 400
 
-            conn = get_connection()
-            cursor = conn.cursor()
+                conn = get_connection()
+                cursor = conn.cursor()
 
-            sql = """
-                INSERT INTO productos (clave, descripcion, clave_alterna, unidad_entrada, editar_precio, id_linea)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                    clave = VALUES(clave),
-                    descripcion = VALUES(descripcion),
-                    clave_alterna = COALESCE(VALUES(clave_alterna), clave_alterna),
-                    unidad_entrada = COALESCE(VALUES(unidad_entrada), unidad_entrada),
-                    editar_precio = 0,
-                    id_linea = VALUES(id_linea);
-                """
+                sql = """
+                    INSERT INTO productos (clave, descripcion, clave_alterna, unidad_entrada, editar_precio, id_linea)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        clave = VALUES(clave),
+                        descripcion = VALUES(descripcion),
+                        clave_alterna = COALESCE(VALUES(clave_alterna), clave_alterna),
+                        unidad_entrada = COALESCE(VALUES(unidad_entrada), unidad_entrada),
+                        editar_precio = 0,
+                        id_linea = VALUES(id_linea);
+                    """
 
-            exitosos = 0
-            errores = []
-            batch = []
-            batch_precios = {}
+                exitosos = 0
+                errores = []
+                batch = []
+                batch_precios = {}
 
-            for index, row in df.iterrows():
-                try:
-                    clave = clean(row['clave'])
-                    des = clean(row['descripcion'])
-                    claLine = clean(row['clave de linea'])
-                    claAlt = clean(row['clave alterna'])
-                    unidad_entrada = clean(row['unidad de entrada'])
+                for index, row in df.iterrows():
+                    try:
+                        clave = clean(row['clave'])
+                        des = clean(row['descripcion'])
+                        claLine = clean(row['clave de linea'])
+                        claAlt = clean(row['clave alterna'])
+                        unidad_entrada = clean(row['unidad de entrada'])
 
-                    # Construir el batch para la lista de los catalogos con el asociativo clave de producto
-                    if clave not in batch_precios:
-                        batch_precios[clave] = {}
-                    for k, id_precio in list_precios.items():
-                        valor = clean(row.get(k))
-                        if valor is not None and valor != "":
-                            batch_precios[clave][id_precio] = valor
+                        # Construir el batch para la lista de los catalogos con el asociativo clave de producto
+                        if clave not in batch_precios:
+                            batch_precios[clave] = {}
+                        for k, id_precio in list_precios.items():
+                            valor = clean(row.get(k))
+                            if valor is not None and valor != "":
+                                batch_precios[clave][id_precio] = valor
 
-                    id_line = rows_line.get(f'{claLine}') # se compara con el value, en el cat de array de la linea si existe el id
-                    if id_line is None:
-                        errores.append({'fila': index + 2, 'error': f'Línea no encontrada: {claLine}'})
-                        continue
+                        id_line = rows_line.get(f'{claLine}') # se compara con el value, en el cat de array de la linea si existe el id
+                        if id_line is None:
+                            errores.append({'fila': index + 2, 'error': f'Línea no encontrada: {claLine}'})
+                            continue
 
-                    batch.append((clave, des, claAlt, unidad_entrada, 0, id_line))
-                    # Ejecutar en bloques de N filas
-                    if len(batch) >= BATCH_SIZE:
-                        #print("Longitud ", batch)
-                        #print("BATCH ", BATCH_SIZE)
-                        cursor.executemany(sql, batch)
-                        conn.commit()
-                        exitosos += len(batch)
-                        batch.clear()
+                        batch.append((clave, des, claAlt, unidad_entrada, 0, id_line))
+                        # Ejecutar en bloques de N filas
+                        if len(batch) >= BATCH_SIZE:
+                            #print("Longitud ", batch)
+                            #print("BATCH ", BATCH_SIZE)
+                            cursor.executemany(sql, batch)
+                            conn.commit()
+                            exitosos += len(batch)
+                            batch.clear()
 
-                except Exception as e:
-                    errores.append({'fila': index + 2, 'error': str(e)})
+                    except Exception as e:
+                        errores.append({'fila': index + 2, 'error': str(e)})
 
-            #
+                #
 
-            # Ejecutar las filas restantes
-            if batch:
-                print("Ver cuando entra aqui", batch)
-                cursor.executemany(sql, batch)
-                conn.commit()
-                exitosos += len(batch)
-            if batch_precios:
-                sql_precios = "INSERT INTO precios (id_producto, id_precio, precio) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE precio = VALUES(precio)"
-                precios_insert = []
-                for id_producto, precios in batch_precios.items():
-                    sql_id_products = "SELECT id_producto FROM productos WHERE clave = %s"
-                    cursor.execute(sql_id_products, id_producto)
-                    id_prod = cursor.fetchone()
-                    print("id_producto asd", id_prod.get('id_producto'))
-                    for id_tipo_precio, valor in precios.items():
-                        precios_insert.append((id_prod.get('id_producto'), id_tipo_precio, valor))
-
-                if precios_insert:
-                    cursor.executemany(sql_precios, precios_insert)
+                # Ejecutar las filas restantes
+                if batch:
+                    cursor.executemany(sql, batch)
                     conn.commit()
-            cursor.close()
-            conn.close()
+                    exitosos += len(batch)
+                if batch_precios:
+                    sql_precios = "INSERT INTO precios (id_producto, id_precio, precio) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE precio = VALUES(precio)"
+                    precios_insert = []
+                    for id_producto, precios in batch_precios.items():
+                        sql_id_products = "SELECT id_producto FROM productos WHERE clave = %s"
+                        cursor.execute(sql_id_products, id_producto)
+                        id_prod = cursor.fetchone()
+                        for id_tipo_precio, valor in precios.items():
+                            precios_insert.append((id_prod.get('id_producto'), id_tipo_precio, valor))
 
-            return jsonify({
-                'total': len(df),
-                'exitosos': exitosos,
-                'errores': errores
-            })
+                    if precios_insert:
+                        cursor.executemany(sql_precios, precios_insert)
+                        conn.commit()
+                cursor.close()
+                conn.close()
+
+                return jsonify({
+                    'total': len(df),
+                    'exitosos': exitosos,
+                    'errores': errores
+                })
 
         except Exception as e:
             return jsonify({'error': str(e)}), 500
